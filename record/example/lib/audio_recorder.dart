@@ -3,13 +3,16 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
+import 'package:record_example/upload_audio.dart';
 
 import 'platform/audio_recorder_platform.dart';
 
 class Recorder extends StatefulWidget {
   final void Function(String path) onStop;
+  final void Function(String text) onTranscribeComplete;
 
-  const Recorder({Key? key, required this.onStop}) : super(key: key);
+  const Recorder({Key? key, required this.onStop, required this.onTranscribeComplete})
+      : super(key: key);
 
   @override
   State<Recorder> createState() => _RecorderState();
@@ -22,7 +25,6 @@ class _RecorderState extends State<Recorder> with AudioRecorderMixin {
   StreamSubscription<RecordState>? _recordSub;
   RecordState _recordState = RecordState.stop;
   StreamSubscription<Amplitude>? _amplitudeSub;
-  Amplitude? _amplitude;
 
   @override
   void initState() {
@@ -30,12 +32,6 @@ class _RecorderState extends State<Recorder> with AudioRecorderMixin {
 
     _recordSub = _audioRecorder.onStateChanged().listen((recordState) {
       _updateRecordState(recordState);
-    });
-
-    _amplitudeSub = _audioRecorder
-        .onAmplitudeChanged(const Duration(milliseconds: 300))
-        .listen((amp) {
-      setState(() => _amplitude = amp);
     });
 
     super.initState();
@@ -51,7 +47,9 @@ class _RecorderState extends State<Recorder> with AudioRecorderMixin {
           encoder,
         );
 
-        debugPrint('${encoder.name} supported: $isSupported');
+        if (!isSupported) {
+          debugPrint('${encoder.name} supported: $isSupported');
+        }
 
         final devs = await _audioRecorder.listInputDevices();
         debugPrint(devs.toString());
@@ -60,9 +58,6 @@ class _RecorderState extends State<Recorder> with AudioRecorderMixin {
 
         // Record to file
         await recordFile(_audioRecorder, config);
-
-        // Record to stream
-        // await recordStream(_audioRecorder, config);
 
         _recordDuration = 0;
 
@@ -77,17 +72,19 @@ class _RecorderState extends State<Recorder> with AudioRecorderMixin {
 
   Future<void> _stop() async {
     final path = await _audioRecorder.stop();
-
     if (path != null) {
       widget.onStop(path);
+      if (_recordDuration > 3) {
+        debugPrint('Audio is too long to transcribe');
+        return;
+      }
 
-      downloadWebData(path);
+      String? transcription = await uploadAudioForTranscription(path);
+      if (transcription != null) {
+        widget.onTranscribeComplete(transcription);
+      }
     }
   }
-
-  Future<void> _pause() => _audioRecorder.pause();
-
-  Future<void> _resume() => _audioRecorder.resume();
 
   void _updateRecordState(RecordState recordState) {
     setState(() => _recordState = recordState);
@@ -108,29 +105,18 @@ class _RecorderState extends State<Recorder> with AudioRecorderMixin {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      home: Scaffold(
-        body: Column(
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Row(
           mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: <Widget>[
-                _buildRecordStopControl(),
-                const SizedBox(width: 20),
-                _buildPauseResumeControl(),
-                const SizedBox(width: 20),
-                _buildText(),
-              ],
-            ),
-            if (_amplitude != null) ...[
-              const SizedBox(height: 40),
-              Text('Current: ${_amplitude?.current ?? 0.0}'),
-              Text('Max: ${_amplitude?.max ?? 0.0}'),
-            ],
+          children: <Widget>[
+            _buildRecordStopControl(),
+            const SizedBox(width: 20),
+            _buildText(),
           ],
         ),
-      ),
+      ],
     );
   }
 
@@ -163,36 +149,6 @@ class _RecorderState extends State<Recorder> with AudioRecorderMixin {
           child: SizedBox(width: 56, height: 56, child: icon),
           onTap: () {
             (_recordState != RecordState.stop) ? _stop() : _start();
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPauseResumeControl() {
-    if (_recordState == RecordState.stop) {
-      return const SizedBox.shrink();
-    }
-
-    late Icon icon;
-    late Color color;
-
-    if (_recordState == RecordState.record) {
-      icon = const Icon(Icons.pause, color: Colors.red, size: 30);
-      color = Colors.red.withOpacity(0.1);
-    } else {
-      final theme = Theme.of(context);
-      icon = const Icon(Icons.play_arrow, color: Colors.red, size: 30);
-      color = theme.primaryColor.withOpacity(0.1);
-    }
-
-    return ClipOval(
-      child: Material(
-        color: color,
-        child: InkWell(
-          child: SizedBox(width: 56, height: 56, child: icon),
-          onTap: () {
-            (_recordState == RecordState.pause) ? _resume() : _pause();
           },
         ),
       ),
